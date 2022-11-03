@@ -1,5 +1,4 @@
 import { APIEvent } from "solid-start/api";
-import { parse as parseUrl } from "url";
 import { HTTPGraphQLRequest } from "@apollo/server";
 import { server } from "~/lib/apollo/server";
 
@@ -12,8 +11,8 @@ const handler = async ({ request }: APIEvent) => {
   const req: HTTPGraphQLRequest = {
     method: request.method.toUpperCase(),
     headers: reqHeaders,
-    search: parseUrl(request.url).search ?? "",
-    body: await request.json(),
+    search: new URL(request.url).search,
+    body: await request.json().catch(console.error),
   };
 
   const res = await server.executeHTTPGraphQLRequest({
@@ -26,12 +25,26 @@ const handler = async ({ request }: APIEvent) => {
     resHeaders.set(key, value);
   }
 
+  let body: string | ReadableStream;
+
   if (res.body.kind === "chunked") {
-    // TODO: Handle chunked transfer-encoding.
-    return new Response("Chunked transfer-encoding not supported.", { status: 500 });
+    const asyncIter = res.body.asyncIterator;
+    body = new ReadableStream({
+      async pull(collector) {
+        try {
+          const { done, value } = await asyncIter.next();
+          if (done) collector.close();
+          else collector.enqueue(value);
+        } catch (e) {
+          collector.error(e);
+        }
+      },
+    });
+  } else {
+    body = res.body.string;
   }
 
-  return new Response(res.body.string, {
+  return new Response(body, {
     status: res.status,
     headers: resHeaders,
   });
